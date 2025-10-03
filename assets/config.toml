@@ -1,0 +1,4 @@
+[img]
+input_cine_dir = 'data/raw_cine'
+img_input_dir = 'data/raw_jpg'
+img_output_dir = 'data/processed'
