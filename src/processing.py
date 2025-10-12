@@ -1,5 +1,5 @@
 import cv2
-from dataloader import Experiment, Dataloader, Feature
+from data_manager import Experiment, Dataloader, Feature
 from tqdm import tqdm
 from typing import Sequence
 
@@ -27,6 +27,7 @@ def exec_img(exp: Experiment, exp_id: int):
         gray = cv2.cvtColor(diff, cv2.COLOR_BGR2GRAY)
         ret, thresh = cv2.threshold(gray, 127, 255, cv2.THRESH_BINARY)
         contours, hierarchy = cv2.findContours(thresh, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_NONE)
+        max_contour = None
         if contours:
             max_contour = max(contours, key=cv2.contourArea)
             cv2.drawContours(img, [max_contour], -1, (0, 255, 0), 2)
@@ -36,7 +37,8 @@ def exec_img(exp: Experiment, exp_id: int):
         exp.result_imgs['thresh'][exp_id][idx] = thresh
         exp.result_imgs['contour'][exp_id][idx] = img
 
-        exec_data(exp, exp_id, idx, max_contour)
+        if max_contour is not None:
+            exec_data(exp, exp_id, idx, max_contour)
 
 
 def exec_once(dataloader: Dataloader, exp_id: int):

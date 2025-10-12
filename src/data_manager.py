@@ -1,12 +1,24 @@
 import cv2
 import os
 from typing import Dict, List
-from dataclasses import dataclass
+from dataclasses import dataclass, asdict
 from loguru import logger
 import ipdb
 from tqdm import tqdm
+import json
+import numpy as np
 
 from config import Config
+
+class NpEncoder(json.JSONEncoder):
+    def default(self, obj):
+        if isinstance(obj, np.integer):
+            return int(obj)
+        if isinstance(obj, np.floating):
+            return float(obj)
+        if isinstance(obj, np.ndarray):
+            return obj.tolist()
+        return super(NpEncoder, self).default(obj)
 
 class Feature:
     def __init__(self, feature_dict: dict, label_key: str = None):
@@ -54,11 +66,13 @@ class Experiment:
             'thresh': copy_shape(),
             'contour': copy_shape(),
         }
+        copy_shape_zero = lambda : [[0.0 for _ in experiment_group] for experiment_group in self.experiment_imgs]
+        copy_shape_arr = lambda : [[[] for _ in experiment_group] for experiment_group in self.experiment_imgs]
         self.result_data = {
-            'contour_pts': copy_shape(),
-            'area': copy_shape(),
-            'arc_length': copy_shape(),
-            'expand_vec': copy_shape(),
+            'contour_pts': copy_shape_arr(),
+            'area': copy_shape_zero(),
+            'arc_length': copy_shape_zero(),
+            'expand_vec': copy_shape_zero(),
         }
     
     def save_result_imgs(self, base_output_dir: str):
@@ -87,6 +101,33 @@ class Experiment:
         
         logger.success("finished")
 
+    def save_result_data(self, base_output_dir: str):
+        logger.info(f"saving result data to '{base_output_dir}'...")
+        os.makedirs(base_output_dir, exist_ok=True)
+
+        total_frames = sum(len(exp_frames) for exp_frames in self.experiment_imgs)
+        
+        with tqdm(total=total_frames, desc="saving data", unit="frame") as pbar:
+            for exp_id, exp_frames in enumerate(self.experiment_imgs):
+                condition = self.experiment_conditions[exp_id]
+                condition_data = asdict(condition)
+                
+                target_dir = os.path.join(base_output_dir, f"experiment_{exp_id}")
+                os.makedirs(target_dir, exist_ok=True)
+
+                for frame_id in range(len(exp_frames)):
+                    data = condition_data.copy()
+                    data["frame_id"] = frame_id
+                    for key in self.result_data:
+                        data[key] = self.result_data[key][exp_id][frame_id]
+
+                    file_path = os.path.join(target_dir, f"{frame_id:03d}.json")
+                    with open(file_path, 'w') as f:
+                        json.dump(data, f, indent=4, cls=NpEncoder)
+                    pbar.update(1)
+        
+        logger.success("finished saving data")
+
         
 
 class Dataloader:
@@ -94,6 +135,7 @@ class Dataloader:
         self.config: dict = config.get_config()
         self.img_input_folder: str = self.config['img']['img_input_dir']
         self.img_output_folder: str = self.config['img']['img_output_dir']
+        self.result_output_folder: str = self.config['img']['result_output_dir']
 
         self.experiment = Experiment()
     
@@ -127,10 +169,13 @@ class Dataloader:
                 img = cv2.imread(os.path.join(experiment_path, file))
                 self.experiment.add_experiment_img(img)
             
+            # FIXME: this `break` is only for test
             break
         self.experiment.init_result_imgs()
     
     def save_all_experiment(self):
-        self.experiment.save_result_imgs(self.img_output_folder)
+        # FIXME: this commet is only for test
+        # self.experiment.save_result_imgs(self.img_output_folder)
+        self.experiment.save_result_data(self.result_output_folder)
 
 
