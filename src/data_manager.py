@@ -40,7 +40,8 @@ class ExperimentCondition:
     duration: float
 
 class Experiment:
-    def __init__(self):
+    def __init__(self, config):
+        self.config = config
         self.experiment_imgs: List[List[cv2.Mat]] = []
         self.experiment_features: List[List[Feature]] = []
         self.experiment_conditions: List[ExperimentCondition] = []
@@ -72,7 +73,11 @@ class Experiment:
             'contour_pts': copy_shape_arr(),
             'area': copy_shape_zero(),
             'arc_length': copy_shape_zero(),
-            'expand_vec': copy_shape_zero(),
+            'area_vec': copy_shape_zero(),
+            'regression_circle_center': copy_shape_arr(),
+            'regression_circle_radius': copy_shape_zero(),
+            'expand_dist': copy_shape_arr(),
+            'expand_vec': copy_shape_arr(),
         }
     
     def save_result_imgs(self, base_output_dir: str):
@@ -130,14 +135,14 @@ class Experiment:
 
         
 
-class Dataloader:
+class DataManager:
     def __init__(self, config: Config):
         self.config: dict = config.get_config()
         self.img_input_folder: str = self.config['img']['img_input_dir']
         self.img_output_folder: str = self.config['img']['img_output_dir']
         self.result_output_folder: str = self.config['img']['result_output_dir']
 
-        self.experiment = Experiment()
+        self.experiment = Experiment(self.config)
     
     def parse_condition(self, condition_str: str) -> ExperimentCondition:
         base_name = os.path.basename(condition_str)

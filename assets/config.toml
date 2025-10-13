@@ -3,3 +3,10 @@ input_cine_dir = 'data/raw_cine'
 img_input_dir = 'data/raw_jpg'
 img_output_dir = 'data/processed'
 result_output_dir = 'data/dataset'
+plot_output_dir = 'data/plot'
+
+[data]
+hole_pt = [192, 150]
+scale_horizontal = 0.0
+scale_vertical = 0.0
+image_period = 0.0
