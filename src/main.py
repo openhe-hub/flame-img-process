@@ -9,6 +9,6 @@ if __name__ == '__main__':
     data_manager = DataManager(config)
     data_manager.load_all_experiment()
     exec_once(data_manager, 0)
-    # data_manager.save_all_experiment()
+    data_manager.save_all_experiment()
     vis = Visualizer(config, data_manager)
     vis.plot_all_for_experiment(0)

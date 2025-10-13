@@ -7,6 +7,5 @@ plot_output_dir = 'data/plot'
 
 [data]
 hole_pt = [192, 150]
-scale_horizontal = 0.0
-scale_vertical = 0.0
-image_period = 0.0
+distance_scale = 0.33e-3  # 1 px = 1/3 mm
+time_scale = 10e-6  # 1 frame = 10 \mu s

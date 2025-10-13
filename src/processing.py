@@ -2,9 +2,10 @@ import cv2
 import numpy as np
 from data_manager import Experiment, DataManager, Feature
 from tqdm import tqdm
-from typing import Sequence
+from typing import Sequence, List
 
 def exec_data(exp: Experiment, exp_id: int, idx: int, contour: cv2.Mat):
+    exp.result_data['frame_id'][exp_id][idx] = idx
     exp.result_data['contour_pts'][exp_id][idx] = contour
     exp.result_data['area'][exp_id][idx] = cv2.contourArea(contour)
     exp.result_data['arc_length'][exp_id][idx] = cv2.arcLength(contour, True)
@@ -54,9 +55,14 @@ def exec_img(exp: Experiment, exp_id: int):
         if max_contour is not None:
             exec_data(exp, exp_id, idx, max_contour)
 
+def transform_all(exp: Experiment, exp_id: int):
+    frames = len(exp.experiment_imgs[exp_id])
+    for frame_id in range(frames):
+        transform_scale(exp.config['data'], exp, exp_id, frame_id)
 
 def exec_once(data_manager: DataManager, exp_id: int):
     exec_img(data_manager.experiment, 0)
+    transform_all(data_manager.experiment, 0)
 
 def regression_circle(contour: cv2.Mat):
     points = contour.reshape(-1, 2)
@@ -115,5 +121,18 @@ def calc_dist_direction(hole_pt, contour):
     return [dist_up, dist_right, dist_down, dist_left]
 
 
-def calc_vec_direction(curr_dist, prev_dist):
+def calc_vec_direction(curr_dist: List[float], prev_dist: List[float]):
     return [(curr - prev) for curr, prev in zip(curr_dist, prev_dist)]
+
+def transform_scale(data_config, exp: Experiment, exp_id: int, frame_id: int):
+    distance_scale = data_config['distance_scale']
+    time_scale = data_config['time_scale']
+
+    exp.result_data['area'][exp_id][frame_id] *= distance_scale ** 2 
+    exp.result_data['arc_length'][exp_id][frame_id] *= distance_scale
+    exp.result_data['area_vec'][exp_id][frame_id] *= distance_scale ** 2 / time_scale
+    dists = exp.result_data['expand_dist'][exp_id][frame_id]
+    exp.result_data['expand_dist'][exp_id][frame_id] = [d * distance_scale for d in dists]
+    vecs = exp.result_data['expand_vec'][exp_id][frame_id]
+    exp.result_data['expand_vec'][exp_id][frame_id] = [v * distance_scale / time_scale for v in vecs]
+    exp.result_data['time'][exp_id][frame_id] = exp.result_data['frame_id'][exp_id][frame_id] * time_scale

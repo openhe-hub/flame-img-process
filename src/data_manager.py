@@ -78,6 +78,8 @@ class Experiment:
             'regression_circle_radius': copy_shape_zero(),
             'expand_dist': copy_shape_arr(),
             'expand_vec': copy_shape_arr(),
+            'frame_id': copy_shape_zero(),
+            'time': copy_shape_zero(),
         }
     
     def save_result_imgs(self, base_output_dir: str):
@@ -122,7 +124,7 @@ class Experiment:
 
                 for frame_id in range(len(exp_frames)):
                     data = condition_data.copy()
-                    data["frame_id"] = frame_id
+                    # data["frame_id"] = frame_id
                     for key in self.result_data:
                         data[key] = self.result_data[key][exp_id][frame_id]
 
