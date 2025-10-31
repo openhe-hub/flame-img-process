@@ -28,11 +28,18 @@ def exec_data(exp: Experiment, exp_id: int, idx: int, contour: cv2.Mat):
         exp.result_data['expand_vec'][exp_id][idx] = calc_vec_direction(curr_dist, prev_dist)
     else:
         exp.result_data['expand_vec'][exp_id][idx] = [0.,0.,0.,0.]
+    
+    tip_pt = exp.config["data"]["tip_pt"]
+    exp.result_data['tip_distance'][exp_id][idx] = calc_tip_distance(tip_pt, contour)
 
 
 def exec_img(exp: Experiment, exp_id: int):
     raw_imgs = exp.experiment_imgs[exp_id]
     base_img = raw_imgs[0]
+    
+    # --- Check config to decide whether to save images ---
+    should_save_images = exp.config.get('img', {}).get('save_processed_images', True)
+
     progress_bar = tqdm(enumerate(raw_imgs), 
                         total=len(raw_imgs), 
                         desc=f"process exp id = {exp_id}",
@@ -45,12 +52,20 @@ def exec_img(exp: Experiment, exp_id: int):
         max_contour = None
         if contours:
             max_contour = max(contours, key=cv2.contourArea)
-            cv2.drawContours(img, [max_contour], -1, (0, 255, 0), 2)
+            
+            if should_save_images:
+                # Draw contour only if we are saving the image
+                contour_img = img.copy()
+                cv2.drawContours(contour_img, [max_contour], -1, (0, 255, 0), 2)
+                exp.result_imgs['contour'][exp_id][idx] = contour_img
 
-        exp.result_imgs['diff'][exp_id][idx] = diff
-        exp.result_imgs['gray'][exp_id][idx] = gray
-        exp.result_imgs['thresh'][exp_id][idx] = thresh
-        exp.result_imgs['contour'][exp_id][idx] = img
+        if should_save_images:
+            exp.result_imgs['diff'][exp_id][idx] = diff
+            exp.result_imgs['gray'][exp_id][idx] = gray
+            exp.result_imgs['thresh'][exp_id][idx] = thresh
+            # If no contour was found, we still might need to save the original image
+            if 'contour' not in exp.result_imgs or exp.result_imgs['contour'][exp_id][idx] is None:
+                 exp.result_imgs['contour'][exp_id][idx] = img
 
         if max_contour is not None:
             exec_data(exp, exp_id, idx, max_contour)
@@ -81,6 +96,26 @@ def regression_circle(contour: cv2.Mat):
     radius = int(radius)
 
     return center, radius
+
+def calc_tip_distance(tip_pt, contour):
+    points = contour.reshape(-1, 2)
+    tip_x, tip_y = tip_pt
+
+    # If the contour is empty, there's no distance to calculate.
+    if points.size == 0:
+        return 0
+
+    # Find the index of the point on the contour that is vertically closest to the tip.
+    top_point_idx = np.argmin(np.abs(points[:, 0] - tip_x))
+    top_point = points[top_point_idx]
+
+    # The distance is the difference in the y-coordinates.
+    # Since the tip is above the contour, tip_y is smaller, so this should be positive.
+    distance = top_point[1] - tip_y
+    
+    # The distance should not be negative, but as a safeguard.
+    return max(0, distance)
+
 
 def calc_dist_direction(hole_pt, contour):
     points = contour.reshape(-1, 2)
@@ -136,3 +171,4 @@ def transform_scale(data_config, exp: Experiment, exp_id: int, frame_id: int):
     vecs = exp.result_data['expand_vec'][exp_id][frame_id]
     exp.result_data['expand_vec'][exp_id][frame_id] = [v * distance_scale / time_scale for v in vecs]
     exp.result_data['time'][exp_id][frame_id] = exp.result_data['frame_id'][exp_id][frame_id] * time_scale
+    exp.result_data['tip_distance'][exp_id][frame_id] *= distance_scale

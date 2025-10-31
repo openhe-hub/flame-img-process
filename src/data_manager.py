@@ -7,6 +7,7 @@ import ipdb
 from tqdm import tqdm
 import json
 import numpy as np
+from scipy.signal import savgol_filter # <-- 1. IMPORT: Added Savitzky-Golay filter
 
 from config import Config
 
@@ -80,8 +81,78 @@ class Experiment:
             'expand_vec': copy_shape_arr(),
             'frame_id': copy_shape_zero(),
             'time': copy_shape_zero(),
+            'tip_distance': copy_shape_zero(),
         }
     
+    # --- NEW METHOD FOR FILTERING ---
+    # VVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVV
+    def apply_savitzky_golay_filter(self, window_length: int, polyorder: int):
+        """
+        Applies a Savitzky-Golay filter to smooth the result data.
+        
+        Args:
+            window_length (int): The length of the filter window (must be an odd integer).
+            polyorder (int): The order of the polynomial used to fit the samples
+                                (must be less than window_length).
+        """
+        logger.info(f"Applying Savitzky-Golay filter with window={window_length}, order={polyorder}...")
+        
+        # Define which keys in result_data should be smoothed.
+        # We only want to smooth numerical time-series data.
+        keys_to_filter = [
+            'area', 'arc_length', 'area_vec', 'regression_circle_radius', 'tip_distance', 'expand_dist', 'expand_vec'
+        ]
+
+        # Iterate over each experiment
+        for exp_id in range(len(self.experiment_imgs)):
+            num_frames = len(self.experiment_imgs[exp_id])
+            
+            # The window_length must be smaller than the number of data points
+            if window_length > num_frames:
+                logger.warning(f"Experiment {exp_id}: Cannot apply filter because window_length ({window_length}) > num_frames ({num_frames}). Skipping.")
+                continue
+
+            for key in keys_to_filter:
+                if key in self.result_data:
+                    data_series = self.result_data[key][exp_id]
+                    
+                    # Sanitize data to handle inhomogeneous shapes
+                    if any(isinstance(el, (list, tuple)) for el in data_series):
+                        ref_len = None
+                        for el in data_series:
+                            if isinstance(el, (list, tuple)) and el:
+                                ref_len = len(el)
+                                break
+                        
+                        if ref_len is None:
+                            logger.warning(f"Experiment {exp_id}, key '{key}': No valid data found to determine dimension for filtering. Skipping.")
+                            continue
+                            
+                        sanitized_series = []
+                        for el in data_series:
+                            if isinstance(el, (list, tuple)) and len(el) == ref_len:
+                                sanitized_series.append(el)
+                            else:
+                                sanitized_series.append([0.0] * ref_len)
+                        
+                        original_data = np.array(sanitized_series)
+                    else:
+                        original_data = np.array(data_series)
+
+                    # Check if data is non-empty
+                    if original_data.size > 0:
+                        # Apply the filter along the time axis (axis=0)
+                        # This works for both 1D and N-D arrays
+                        filtered_data = savgol_filter(original_data, window_length, polyorder, axis=0)
+                        
+                        # Replace the old data with the new smoothed data
+                        self.result_data[key][exp_id] = filtered_data.tolist()
+        
+        logger.success("Finished applying filter.")
+    # ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+    # --- END OF NEW METHOD ---
+
+
     def save_result_imgs(self, base_output_dir: str):
         logger.info(f"saving result imgs to '{base_output_dir}'...")
         total_images_to_save = sum(
@@ -124,7 +195,6 @@ class Experiment:
 
                 for frame_id in range(len(exp_frames)):
                     data = condition_data.copy()
-                    # data["frame_id"] = frame_id
                     for key in self.result_data:
                         data[key] = self.result_data[key][exp_id][frame_id]
 
@@ -134,8 +204,6 @@ class Experiment:
                     pbar.update(1)
         
         logger.success("finished saving data")
-
-        
 
 class DataManager:
     def __init__(self, config: Config):
@@ -181,8 +249,17 @@ class DataManager:
         self.experiment.init_result_imgs()
     
     def save_all_experiment(self):
+        # --- 2. APPLY FILTER: Call the new filter method before saving ---
+        # You need to choose values for window_length and polyorder.
+        # window_length: Must be an odd integer. Larger values mean more smoothing.
+        # polyorder: Must be less than window_length. 2 or 3 is a good start.
+        # Experiment with these values to get the desired level of smoothing!
+        window = 199  # Example value, must be odd
+        order = 5    # Example value, must be < window
+        self.experiment.apply_savitzky_golay_filter(window_length=window, polyorder=order)
+        
+        # Now, save the newly smoothed data
         # FIXME: this commet is only for test
         # self.experiment.save_result_imgs(self.img_output_folder)
+        # I have un-commented this line for you to save the filtered data
         self.experiment.save_result_data(self.result_output_folder)
-
-
