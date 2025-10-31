@@ -46,15 +46,17 @@ class Experiment:
         self.experiment_imgs: List[List[cv2.Mat]] = []
         self.experiment_features: List[List[Feature]] = []
         self.experiment_conditions: List[ExperimentCondition] = []
+        self.experiment_names: List[str] = []
         self.experiment_cnt: int = 0
         self.curr_experiment_idx: int = -1
         self.result_imgs: dict = {}
         self.result_data: dict = {}
     
-    def add_experiment(self, condition: ExperimentCondition):
+    def add_experiment(self, condition: ExperimentCondition, name: str):
         self.experiment_imgs.append([])
         self.experiment_features.append([])
         self.experiment_conditions.append(condition)
+        self.experiment_names.append(name)
         self.curr_experiment_idx += 1
     
     def add_experiment_img(self, img: cv2.Mat):
@@ -86,34 +88,33 @@ class Experiment:
     
     # --- NEW METHOD FOR FILTERING ---
     # VVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVV
-    def apply_savitzky_golay_filter(self, window_length: int, polyorder: int):
+    def apply_savitzky_golay_filter(self, filter_configs: dict):
         """
-        Applies a Savitzky-Golay filter to smooth the result data.
+        Applies a Savitzky-Golay filter to smooth the result data using custom settings for each data key.
         
         Args:
-            window_length (int): The length of the filter window (must be an odd integer).
-            polyorder (int): The order of the polynomial used to fit the samples
-                                (must be less than window_length).
+            filter_configs (dict): A dictionary where keys are the names of the data series to filter,
+                                 and values are dicts with 'window_length' and 'polyorder'.
         """
-        logger.info(f"Applying Savitzky-Golay filter with window={window_length}, order={polyorder}...")
+        logger.info(f"Applying custom Savitzky-Golay filters...")
         
-        # Define which keys in result_data should be smoothed.
-        # We only want to smooth numerical time-series data.
-        keys_to_filter = [
-            'area', 'arc_length', 'area_vec', 'regression_circle_radius', 'tip_distance', 'expand_dist', 'expand_vec'
-        ]
+        keys_to_filter = list(filter_configs.keys())
 
         # Iterate over each experiment
         for exp_id in range(len(self.experiment_imgs)):
             num_frames = len(self.experiment_imgs[exp_id])
-            
-            # The window_length must be smaller than the number of data points
-            if window_length > num_frames:
-                logger.warning(f"Experiment {exp_id}: Cannot apply filter because window_length ({window_length}) > num_frames ({num_frames}). Skipping.")
-                continue
 
             for key in keys_to_filter:
                 if key in self.result_data:
+                    # Get specific filter settings for this key
+                    window_length = filter_configs[key]['window_length']
+                    polyorder = filter_configs[key]['polyorder']
+
+                    # The window_length must be smaller than the number of data points
+                    if window_length > num_frames:
+                        logger.warning(f"Experiment {exp_id}, key '{key}': Cannot apply filter because window_length ({window_length}) > num_frames ({num_frames}). Skipping.")
+                        continue
+
                     data_series = self.result_data[key][exp_id]
                     
                     # Sanitize data to handle inhomogeneous shapes
@@ -142,7 +143,6 @@ class Experiment:
                     # Check if data is non-empty
                     if original_data.size > 0:
                         # Apply the filter along the time axis (axis=0)
-                        # This works for both 1D and N-D arrays
                         filtered_data = savgol_filter(original_data, window_length, polyorder, axis=0)
                         
                         # Replace the old data with the new smoothed data
@@ -167,9 +167,10 @@ class Experiment:
         with tqdm(total=total_images_to_save, desc="saving imgs", unit="img") as pbar:
             for result_type, all_experiments_imgs in self.result_imgs.items():
                 for exp_id, experiment_group_imgs in enumerate(all_experiments_imgs):
+                    exp_name = self.experiment_names[exp_id]
                     for img_idx, img in enumerate(experiment_group_imgs):
                         if img is not None:
-                            target_dir = os.path.join(base_output_dir, f"experiment_{exp_id}", result_type)
+                            target_dir = os.path.join(base_output_dir, exp_name, result_type)
                             os.makedirs(target_dir, exist_ok=True)
                             
                             file_path = os.path.join(target_dir, f"{img_idx:03d}.png")
@@ -189,8 +190,9 @@ class Experiment:
             for exp_id, exp_frames in enumerate(self.experiment_imgs):
                 condition = self.experiment_conditions[exp_id]
                 condition_data = asdict(condition)
+                exp_name = self.experiment_names[exp_id]
                 
-                target_dir = os.path.join(base_output_dir, f"experiment_{exp_id}")
+                target_dir = os.path.join(base_output_dir, exp_name)
                 os.makedirs(target_dir, exist_ok=True)
 
                 for frame_id in range(len(exp_frames)):
@@ -225,10 +227,12 @@ class DataManager:
             duration=float(parts[4].replace('ms', ''))
         )
     
-    def load_all_experiment(self):
+    def load_all_experiment(self, end_idx=-1):
         folders = os.listdir(self.img_input_folder)
         logger.debug(f"{len(folders)} folders found.")
-        for folder in folders:
+        for folder_idx, folder in enumerate(folders):
+            if end_idx != -1 and folder_idx == end_idx: break
+
             logger.debug(f"Begin loading experiment {folder}")
 
             experiment_path = os.path.join(self.img_input_folder, folder)
@@ -238,28 +242,30 @@ class DataManager:
 
             condition = self.parse_condition(folder)
             logger.debug(f"condition = {condition}")
-            self.experiment.add_experiment(condition)
+            self.experiment.add_experiment(condition, folder)
 
             for file in tqdm(files, desc=f"loading imgs from {folder}"):
                 img = cv2.imread(os.path.join(experiment_path, file))
                 self.experiment.add_experiment_img(img)
             
-            # FIXME: this `break` is only for test
-            break
         self.experiment.init_result_imgs()
     
     def save_all_experiment(self):
-        # --- 2. APPLY FILTER: Call the new filter method before saving ---
-        # You need to choose values for window_length and polyorder.
-        # window_length: Must be an odd integer. Larger values mean more smoothing.
-        # polyorder: Must be less than window_length. 2 or 3 is a good start.
-        # Experiment with these values to get the desired level of smoothing!
-        window = 199  # Example value, must be odd
-        order = 5    # Example value, must be < window
-        self.experiment.apply_savitzky_golay_filter(window_length=window, polyorder=order)
+        # --- 2. APPLY FILTER: Define custom filter settings for each key ---
+        filter_configs = {
+            'area': {'window_length': 199, 'polyorder': 5},
+            'arc_length': {'window_length': 199, 'polyorder': 5},
+            'area_vec': {'window_length': 399, 'polyorder': 5},
+            'regression_circle_radius': {'window_length': 199, 'polyorder': 5},
+            'expand_dist': {'window_length': 199, 'polyorder': 5},
+            'expand_vec': {'window_length': 399, 'polyorder': 5},
+            'tip_distance': {'window_length': 1999, 'polyorder': 5}, # Stronger filter for noisy data
+        }
+        self.experiment.apply_savitzky_golay_filter(filter_configs)
         
         # Now, save the newly smoothed data
-        # FIXME: this commet is only for test
-        # self.experiment.save_result_imgs(self.img_output_folder)
-        # I have un-commented this line for you to save the filtered data
-        self.experiment.save_result_data(self.result_output_folder)
+        if self.config.get('img', {}).get('save_processed_images', True):
+            self.experiment.save_result_imgs(self.img_output_folder)
+        
+        if self.config.get('img', {}).get('save_processed_data', True):
+            self.experiment.save_result_data(self.result_output_folder)

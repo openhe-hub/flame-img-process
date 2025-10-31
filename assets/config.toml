@@ -4,6 +4,7 @@ img_output_dir = "data/processed"
 result_output_dir = "data/dataset"
 plot_output_dir = "data/plot"
 save_processed_images = false
+save_processed_data = true
 
 [data]
 hole_pt = [192, 150]

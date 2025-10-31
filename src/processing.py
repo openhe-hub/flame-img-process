@@ -76,8 +76,8 @@ def transform_all(exp: Experiment, exp_id: int):
         transform_scale(exp.config['data'], exp, exp_id, frame_id)
 
 def exec_once(data_manager: DataManager, exp_id: int):
-    exec_img(data_manager.experiment, 0)
-    transform_all(data_manager.experiment, 0)
+    exec_img(data_manager.experiment, exp_id)
+    transform_all(data_manager.experiment, exp_id)
 
 def regression_circle(contour: cv2.Mat):
     points = contour.reshape(-1, 2)
