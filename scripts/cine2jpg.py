@@ -5,7 +5,7 @@ from pycine.raw import read_frames
 
 # --- Configuration Section ---
 CINE_SOURCE_DIR = os.path.join('data', 'raw_cine')
-JPG_TARGET_DIR = os.path.join('data', 'raw_jpg')
+JPG_TARGET_DIR = os.path.join('data', 'converted_imgs')
 # --- End of Configuration ---
 
 def process_single_cine(cine_filepath, output_base_dir):

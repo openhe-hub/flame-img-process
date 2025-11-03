@@ -49,6 +49,9 @@ def aggregate_json_to_csv(root_dir: str, output_csv_path: str):
                 with open(file_path, 'r') as f:
                     data = json.load(f)
                 
+                # Remove the 'contour_pts' field if it exists
+                data.pop('contour_pts', None)
+
                 # Add the experiment name and frame_id to the data
                 data['experiment_name'] = exp_name
                 # The frame_id from the JSON is more reliable, but we can use the filename as a fallback

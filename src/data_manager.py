@@ -7,6 +7,7 @@ import ipdb
 from tqdm import tqdm
 import json
 import numpy as np
+import pandas as pd
 from scipy.signal import savgol_filter # <-- 1. IMPORT: Added Savitzky-Golay filter
 
 from config import Config
@@ -180,32 +181,54 @@ class Experiment:
         
         logger.success("finished")
 
-    def save_result_data(self, base_output_dir: str):
-        logger.info(f"saving result data to '{base_output_dir}'...")
-        os.makedirs(base_output_dir, exist_ok=True)
-
-        total_frames = sum(len(exp_frames) for exp_frames in self.experiment_imgs)
+    def save_result_data(self, output_csv_path: str):
+        logger.info(f"Aggregating and saving result data to '{output_csv_path}'...")
         
-        with tqdm(total=total_frames, desc="saving data", unit="frame") as pbar:
-            for exp_id, exp_frames in enumerate(self.experiment_imgs):
-                condition = self.experiment_conditions[exp_id]
-                condition_data = asdict(condition)
-                exp_name = self.experiment_names[exp_id]
-                
-                target_dir = os.path.join(base_output_dir, exp_name)
-                os.makedirs(target_dir, exist_ok=True)
+        all_data = []
+        
+        # Iterate through each experiment and each frame to build a flat list of data records
+        for exp_id, exp_frames in enumerate(self.experiment_imgs):
+            condition = self.experiment_conditions[exp_id]
+            condition_data = asdict(condition)
+            exp_name = self.experiment_names[exp_id]
 
-                for frame_id in range(len(exp_frames)):
-                    data = condition_data.copy()
-                    for key in self.result_data:
+            for frame_id in range(len(exp_frames)):
+                # Start with the experiment condition and name
+                data = condition_data.copy()
+                data['experiment_name'] = exp_name
+                
+                # Add all the calculated data for the current frame
+                for key in self.result_data:
+                    # Exclude data points that are not easily serializable to CSV
+                    if key not in ['contour_pts']:
                         data[key] = self.result_data[key][exp_id][frame_id]
 
-                    file_path = os.path.join(target_dir, f"{frame_id:03d}.json")
-                    with open(file_path, 'w') as f:
-                        json.dump(data, f, indent=4, cls=NpEncoder)
-                    pbar.update(1)
+                all_data.append(data)
+
+        if not all_data:
+            logger.warning("No data was aggregated. The output CSV will not be created.")
+            return
+
+        # Convert the list of dictionaries to a pandas DataFrame
+        df = pd.DataFrame(all_data)
         
-        logger.success("finished saving data")
+        # Ensure 'experiment_name' and 'frame_id' are the first columns for clarity
+        cols = ['experiment_name', 'frame_id'] + [col for col in df.columns if col not in ['experiment_name', 'frame_id']]
+        df = df[cols]
+
+        # Save the DataFrame to a single CSV file
+        try:
+            output_dir = os.path.dirname(output_csv_path)
+            if output_dir:
+                os.makedirs(output_dir, exist_ok=True)
+            
+            # Check if file exists to decide whether to write header
+            file_exists = os.path.exists(output_csv_path)
+            df.to_csv(output_csv_path, mode='a', header=not file_exists, index=False)
+            logger.success(f"Successfully saved {len(all_data)} records to {output_csv_path}")
+        except IOError as e:
+            logger.error(f"Could not write to CSV file {output_csv_path}: {e}")
+
 
 class DataManager:
     def __init__(self, config: Config):
@@ -213,9 +236,10 @@ class DataManager:
         self.img_input_folder: str = self.config['img']['img_input_dir']
         self.img_output_folder: str = self.config['img']['img_output_dir']
         self.result_output_folder: str = self.config['img']['result_output_dir']
-
+        # --- Get the new CSV path from config ---
+        self.result_csv_path: str = self.config['img'].get('result_csv_path', 'data/dataset/dataset.csv')
         self.experiment = Experiment(self.config)
-    
+
     def parse_condition(self, condition_str: str) -> ExperimentCondition:
         base_name = os.path.basename(condition_str)
         parts = base_name.split('-')
@@ -238,6 +262,10 @@ class DataManager:
             experiment_path = os.path.join(self.img_input_folder, folder)
             files = os.listdir(experiment_path)
             files = [f for f in files if f.endswith('.jpg')]
+            
+            # --- FIX: Sort files numerically to ensure correct frame order ---
+            files.sort(key=lambda f: int(os.path.splitext(f)[0].replace('frame_', '')))
+            
             logger.debug(f"{len(files)} imgs found.") 
 
             condition = self.parse_condition(folder)
@@ -268,4 +296,4 @@ class DataManager:
             self.experiment.save_result_imgs(self.img_output_folder)
         
         if self.config.get('img', {}).get('save_processed_data', True):
-            self.experiment.save_result_data(self.result_output_folder)
+            self.experiment.save_result_data(self.result_csv_path)

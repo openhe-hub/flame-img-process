@@ -2,6 +2,7 @@
 img_input_dir = "data/raw_jpg"
 img_output_dir = "data/processed"
 result_output_dir = "data/dataset"
+result_csv_path = "data/dataset/total_dataset.csv"
 plot_output_dir = "data/plot"
 save_processed_images = false
 save_processed_data = true

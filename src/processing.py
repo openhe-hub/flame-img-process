@@ -5,7 +5,6 @@ from tqdm import tqdm
 from typing import Sequence, List
 
 def exec_data(exp: Experiment, exp_id: int, idx: int, contour: cv2.Mat):
-    exp.result_data['frame_id'][exp_id][idx] = idx
     exp.result_data['contour_pts'][exp_id][idx] = contour
     exp.result_data['area'][exp_id][idx] = cv2.contourArea(contour)
     exp.result_data['arc_length'][exp_id][idx] = cv2.arcLength(contour, True)
@@ -45,6 +44,7 @@ def exec_img(exp: Experiment, exp_id: int):
                         desc=f"process exp id = {exp_id}",
                         unit="img")
     for idx, img in progress_bar:
+        exp.result_data['frame_id'][exp_id][idx] = idx
         diff = cv2.absdiff(base_img, img)
         gray = cv2.cvtColor(diff, cv2.COLOR_BGR2GRAY)
         ret, thresh = cv2.threshold(gray, 127, 255, cv2.THRESH_BINARY)

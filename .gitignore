@@ -1,3 +1,6 @@
 data/
+docs/
+experiments/
+checkpoints
 __pycache__/
 .vscode/
