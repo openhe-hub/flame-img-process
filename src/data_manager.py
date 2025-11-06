@@ -1,5 +1,7 @@
 import cv2
 import os
+import re
+import shutil
 from typing import Dict, List
 from dataclasses import dataclass, asdict
 from loguru import logger
@@ -100,6 +102,7 @@ class Experiment:
         logger.info(f"Applying custom Savitzky-Golay filters...")
         
         keys_to_filter = list(filter_configs.keys())
+        non_negative_keys = {'area', 'arc_length', 'regression_circle_radius', 'tip_distance', 'expand_dist'}
 
         # Iterate over each experiment
         for exp_id in range(len(self.experiment_imgs)):
@@ -143,8 +146,36 @@ class Experiment:
 
                     # Check if data is non-empty
                     if original_data.size > 0:
+                        series_length = original_data.shape[0]
+                        if series_length <= polyorder:
+                            logger.warning(
+                                f"Experiment {exp_id}, key '{key}': series length ({series_length}) "
+                                f"is not greater than polyorder ({polyorder}). Skipping."
+                            )
+                            continue
+
+                        effective_window = min(window_length, series_length)
+                        if effective_window % 2 == 0:
+                            effective_window -= 1
+
+                        if effective_window <= polyorder:
+                            logger.warning(
+                                f"Experiment {exp_id}, key '{key}': adjusted window_length ({effective_window}) "
+                                f"is not greater than polyorder ({polyorder}). Skipping."
+                            )
+                            continue
+
+                        if effective_window != window_length:
+                            logger.debug(
+                                f"Experiment {exp_id}, key '{key}': window_length reduced from "
+                                f"{window_length} to {effective_window} to fit series length ({series_length})."
+                            )
+
                         # Apply the filter along the time axis (axis=0)
-                        filtered_data = savgol_filter(original_data, window_length, polyorder, axis=0)
+                        filtered_data = savgol_filter(original_data, effective_window, polyorder, axis=0)
+
+                        if key in non_negative_keys:
+                            filtered_data = np.maximum(filtered_data, 0.0)
                         
                         # Replace the old data with the new smoothed data
                         self.result_data[key][exp_id] = filtered_data.tolist()
@@ -156,6 +187,14 @@ class Experiment:
 
     def save_result_imgs(self, base_output_dir: str):
         logger.info(f"saving result imgs to '{base_output_dir}'...")
+
+        # Remove stale outputs for current experiments to avoid leftover frames beyond the trimmed range.
+        if os.path.isdir(base_output_dir):
+            for exp_name in self.experiment_names:
+                exp_dir = os.path.join(base_output_dir, exp_name)
+                if os.path.isdir(exp_dir):
+                    shutil.rmtree(exp_dir)
+
         total_images_to_save = sum(
             1
             for all_exps in self.result_imgs.values()
@@ -182,52 +221,64 @@ class Experiment:
         logger.success("finished")
 
     def save_result_data(self, output_csv_path: str):
-        logger.info(f"Aggregating and saving result data to '{output_csv_path}'...")
-        
-        all_data = []
-        
-        # Iterate through each experiment and each frame to build a flat list of data records
-        for exp_id, exp_frames in enumerate(self.experiment_imgs):
+        logger.info("Saving result data per experiment...")
+
+        img_config = self.config.get('img', {})
+        output_dir = img_config.get('result_output_dir')
+        if not output_dir:
+            output_dir = os.path.dirname(output_csv_path)
+        if not output_dir:
+            output_dir = "."
+
+        os.makedirs(output_dir, exist_ok=True)
+
+        # Remove legacy aggregated file if it exists to avoid confusion.
+        if output_csv_path and os.path.isfile(output_csv_path):
+            try:
+                os.remove(output_csv_path)
+                logger.info(f"Removed legacy aggregated CSV at '{output_csv_path}'.")
+            except OSError as exc:
+                logger.warning(f"Unable to remove legacy CSV '{output_csv_path}': {exc}")
+
+        for exp_id, _ in enumerate(self.experiment_imgs):
             condition = self.experiment_conditions[exp_id]
             condition_data = asdict(condition)
             exp_name = self.experiment_names[exp_id]
 
-            for frame_id in range(len(exp_frames)):
-                # Start with the experiment condition and name
-                data = condition_data.copy()
-                data['experiment_name'] = exp_name
-                
-                # Add all the calculated data for the current frame
-                for key in self.result_data:
-                    # Exclude data points that are not easily serializable to CSV
-                    if key not in ['contour_pts']:
-                        data[key] = self.result_data[key][exp_id][frame_id]
+            frame_ids = self.result_data['frame_id'][exp_id]
+            frame_count = len(frame_ids)
+            if frame_count == 0:
+                logger.warning(f"Experiment '{exp_name}' has no frames after trimming; skipping CSV export.")
+                continue
 
-                all_data.append(data)
+            exp_records = []
+            for frame_idx in range(frame_count):
+                record = condition_data.copy()
+                record['experiment_name'] = exp_name
 
-        if not all_data:
-            logger.warning("No data was aggregated. The output CSV will not be created.")
-            return
+                for key, per_experiment_data in self.result_data.items():
+                    if key == 'contour_pts':
+                        continue
+                    record[key] = per_experiment_data[exp_id][frame_idx]
 
-        # Convert the list of dictionaries to a pandas DataFrame
-        df = pd.DataFrame(all_data)
-        
-        # Ensure 'experiment_name' and 'frame_id' are the first columns for clarity
-        cols = ['experiment_name', 'frame_id'] + [col for col in df.columns if col not in ['experiment_name', 'frame_id']]
-        df = df[cols]
+                exp_records.append(record)
 
-        # Save the DataFrame to a single CSV file
-        try:
-            output_dir = os.path.dirname(output_csv_path)
-            if output_dir:
-                os.makedirs(output_dir, exist_ok=True)
-            
-            # Check if file exists to decide whether to write header
-            file_exists = os.path.exists(output_csv_path)
-            df.to_csv(output_csv_path, mode='a', header=not file_exists, index=False)
-            logger.success(f"Successfully saved {len(all_data)} records to {output_csv_path}")
-        except IOError as e:
-            logger.error(f"Could not write to CSV file {output_csv_path}: {e}")
+            if not exp_records:
+                logger.warning(f"No data collected for experiment '{exp_name}'. Skipping export.")
+                continue
+
+            df = pd.DataFrame(exp_records)
+            columns_order = ['experiment_name', 'frame_id'] + [
+                col for col in df.columns if col not in ['experiment_name', 'frame_id']
+            ]
+            df = df[columns_order]
+
+            exp_csv_path = os.path.join(output_dir, f"{exp_name}.csv")
+            try:
+                df.to_csv(exp_csv_path, index=False)
+                logger.success(f"Saved {len(df)} records to '{exp_csv_path}'.")
+            except IOError as exc:
+                logger.error(f"Could not write CSV for experiment '{exp_name}' to '{exp_csv_path}': {exc}")
 
 
 class DataManager:
@@ -239,6 +290,12 @@ class DataManager:
         # --- Get the new CSV path from config ---
         self.result_csv_path: str = self.config['img'].get('result_csv_path', 'data/dataset/dataset.csv')
         self.experiment = Experiment(self.config)
+        self.experiment_groups: Dict[str, List[int]] = {}
+        self.group_order: List[str] = []
+
+    @staticmethod
+    def normalize_experiment_name(name: str) -> str:
+        return re.sub(r'-\d+$', '', name)
 
     def parse_condition(self, condition_str: str) -> ExperimentCondition:
         base_name = os.path.basename(condition_str)
@@ -272,12 +329,160 @@ class DataManager:
             logger.debug(f"condition = {condition}")
             self.experiment.add_experiment(condition, folder)
 
+            base_name = self.normalize_experiment_name(folder)
+            if base_name not in self.experiment_groups:
+                self.experiment_groups[base_name] = []
+                self.group_order.append(base_name)
+            self.experiment_groups[base_name].append(self.experiment.curr_experiment_idx)
+
             for file in tqdm(files, desc=f"loading imgs from {folder}"):
                 img = cv2.imread(os.path.join(experiment_path, file))
                 self.experiment.add_experiment_img(img)
             
         self.experiment.init_result_imgs()
-    
+
+    def aggregate_replicates(self):
+        if not self.experiment_groups:
+            return
+
+        exp = self.experiment
+        new_experiment_imgs: List[List[cv2.Mat]] = []
+        new_experiment_features: List[List[Feature]] = []
+        new_experiment_conditions: List[ExperimentCondition] = []
+        new_experiment_names: List[str] = []
+
+        new_result_imgs = {key: [] for key in exp.result_imgs}
+        new_result_data = {key: [] for key in exp.result_data}
+
+        updated_groups: Dict[str, List[int]] = {}
+        aggregated_any = False
+
+        def _prepare_numeric_sequence(seq, length):
+            trimmed = seq[:length]
+            first_shape = None
+            for elem in trimmed:
+                if isinstance(elem, (list, tuple, np.ndarray)):
+                    arr = np.asarray(elem, dtype=float)
+                    if arr.size == 0:
+                        continue
+                    first_shape = arr.shape
+                    break
+                elif elem is not None:
+                    first_shape = ()
+                    break
+            if first_shape is None:
+                first_shape = ()
+
+            if first_shape == ():
+                try:
+                    return np.asarray(trimmed, dtype=float)
+                except ValueError:
+                    sanitized = []
+                    for elem in trimmed:
+                        try:
+                            sanitized.append(float(elem))
+                        except (TypeError, ValueError):
+                            sanitized.append(0.0)
+                    return np.asarray(sanitized, dtype=float)
+
+            target_shape = first_shape
+            sanitized = []
+            zeros_template = np.zeros(target_shape, dtype=float)
+            for elem in trimmed:
+                if isinstance(elem, (list, tuple, np.ndarray)):
+                    arr = np.asarray(elem, dtype=float)
+                    if arr.shape == target_shape:
+                        sanitized.append(arr)
+                        continue
+                sanitized.append(zeros_template.copy())
+            return np.stack(sanitized, axis=0)
+
+        for base_name in self.group_order:
+            indices = self.experiment_groups.get(base_name, [])
+            if not indices:
+                continue
+
+            indices = sorted(indices)
+            representative_idx = indices[0]
+
+            sequence_lengths = [len(exp.result_data['time'][idx]) for idx in indices if len(exp.result_data['time'][idx]) > 0]
+            if not sequence_lengths:
+                logger.warning(f"Experiment group '{base_name}' has no valid frames; skipping.")
+                continue
+
+            min_len = min(sequence_lengths)
+            if len(indices) > 1:
+                aggregated_any = True
+                logger.info(f"Aggregating {len(indices)} replicates for experiment '{base_name}' (using first {min_len} frames).")
+
+            # Raw images and features (use representative replicate trimmed to min_len)
+            new_experiment_imgs.append(exp.experiment_imgs[representative_idx][:min_len])
+            if exp.experiment_features[representative_idx]:
+                new_experiment_features.append(exp.experiment_features[representative_idx][:min_len])
+            else:
+                new_experiment_features.append([])
+            new_experiment_conditions.append(exp.experiment_conditions[representative_idx])
+            new_index = len(new_experiment_names)
+            new_experiment_names.append(base_name)
+            updated_groups[base_name] = [new_index]
+
+            # Result images: prefer first non-None frame among replicates
+            for key in new_result_imgs:
+                frames: List[cv2.Mat] = []
+                for frame_idx in range(min_len):
+                    chosen_frame = None
+                    for idx in indices:
+                        frames_list = exp.result_imgs[key][idx]
+                        if frame_idx < len(frames_list):
+                            candidate = frames_list[frame_idx]
+                            if candidate is not None:
+                                chosen_frame = candidate
+                                break
+                    frames.append(chosen_frame)
+                new_result_imgs[key].append(frames)
+
+            # Result data aggregation (averages for numeric data, representative for identifiers)
+            for key in new_result_data:
+                if key == 'contour_pts':
+                    new_result_data[key].append(exp.result_data[key][representative_idx][:min_len])
+                    continue
+                if key in ('frame_id', 'time'):
+                    new_result_data[key].append(exp.result_data[key][representative_idx][:min_len])
+                    continue
+
+                sequences = []
+                for idx in indices:
+                    seq = exp.result_data[key][idx]
+                    prepared = _prepare_numeric_sequence(seq, min_len)
+                    sequences.append(prepared)
+
+                if not sequences:
+                    new_result_data[key].append([])
+                    continue
+
+                stacked = np.stack(sequences, axis=0)
+                averaged = stacked.mean(axis=0)
+                new_result_data[key].append(averaged.tolist())
+
+        if aggregated_any:
+            logger.success("Finished aggregating replicate experiments.")
+
+        if not new_experiment_names:
+            logger.warning("No experiments available after replicate aggregation; retaining original data.")
+            return
+
+        exp.experiment_imgs = new_experiment_imgs
+        exp.experiment_features = new_experiment_features
+        exp.experiment_conditions = new_experiment_conditions
+        exp.experiment_names = new_experiment_names
+        exp.experiment_cnt = len(new_experiment_names)
+        exp.curr_experiment_idx = len(new_experiment_names) - 1
+        exp.result_imgs = new_result_imgs
+        exp.result_data = new_result_data
+
+        self.experiment_groups = updated_groups
+        self.group_order = new_experiment_names
+
     def save_all_experiment(self):
         # --- 2. APPLY FILTER: Define custom filter settings for each key ---
         filter_configs = {
@@ -287,9 +492,10 @@ class DataManager:
             'regression_circle_radius': {'window_length': 199, 'polyorder': 5},
             'expand_dist': {'window_length': 199, 'polyorder': 5},
             'expand_vec': {'window_length': 399, 'polyorder': 5},
-            'tip_distance': {'window_length': 1999, 'polyorder': 5}, # Stronger filter for noisy data
+            'tip_distance': {'window_length': 999, 'polyorder': 5}, # Stronger filter for noisy data
         }
         self.experiment.apply_savitzky_golay_filter(filter_configs)
+        self.aggregate_replicates()
         
         # Now, save the newly smoothed data
         if self.config.get('img', {}).get('save_processed_images', True):

@@ -15,11 +15,60 @@ class Visualizer:
         # --- Professional Plotting Style ---
         plt.style.use('seaborn-v0_8-paper')
         self.colors = plt.get_cmap('tab10').colors
-        self.plot_params = {
-            'linewidth': 1.5,
-            'markersize': 3,
-            'marker': 'o',
+        plot_config = self.config.get('plot', {})
+        try:
+            stride_value = int(plot_config.get('frame_stride', 50))
+        except (TypeError, ValueError):
+            stride_value = 50
+        self.frame_stride = max(1, stride_value)
+
+        default_marker_size = 96.0
+        marker_size_value = plot_config.get('marker_size', default_marker_size)
+        try:
+            marker_size = float(marker_size_value)
+        except (TypeError, ValueError):
+            marker_size = default_marker_size
+
+        marker_alpha_value = plot_config.get('marker_alpha', 0.9)
+        try:
+            marker_alpha = float(marker_alpha_value)
+        except (TypeError, ValueError):
+            marker_alpha = 0.9
+        marker_alpha = min(max(marker_alpha, 0.0), 1.0)
+
+        marker_edge = plot_config.get('marker_edge', 'black')
+
+        marker_edge_width_value = plot_config.get('marker_edge_width', 0.6)
+        try:
+            marker_edge_width = float(marker_edge_width_value)
+        except (TypeError, ValueError):
+            marker_edge_width = 0.6
+
+        line_width_value = plot_config.get('line_width', 1.5)
+        try:
+            line_width = float(line_width_value)
+        except (TypeError, ValueError):
+            line_width = 1.5
+
+        line_alpha_value = plot_config.get('line_alpha', 0.7)
+        try:
+            line_alpha = float(line_alpha_value)
+        except (TypeError, ValueError):
+            line_alpha = 0.7
+        line_alpha = min(max(line_alpha, 0.0), 1.0)
+
+        self.scatter_params = {
+            's': marker_size,
+            'alpha': marker_alpha,
+            'marker': plot_config.get('marker', 'o'),
+            'edgecolors': marker_edge,
+            'linewidths': marker_edge_width,
         }
+        self.line_params = {
+            'linewidth': line_width,
+            'alpha': line_alpha,
+        }
+        self.time_axis_label = plot_config.get('time_label', 'Time (ms)')
         self.font_sizes = {
             'title': 16,
             'label': 12,
@@ -48,83 +97,134 @@ class Visualizer:
         plt.close(fig)
         logger.info(f"Saved plot to {save_path}")
 
+    def _to_numpy_sequence(self, data):
+        if isinstance(data, range):
+            return np.arange(data.start, data.stop, data.step, dtype=int)
+        return np.asarray(data)
+
+    def _stride_indices(self, length: int) -> np.ndarray:
+        if length <= 0:
+            return np.empty(0, dtype=int)
+        stride = max(1, self.frame_stride)
+        indices = np.arange(0, length, stride, dtype=int)
+        if indices[-1] != length - 1:
+            indices = np.append(indices, length - 1)
+        return indices
+
+    def _time_series_ms(self, exp_id: int) -> np.ndarray:
+        time_values = self.exp.result_data['time'][exp_id]
+        if not time_values:
+            return np.array([], dtype=float)
+        return np.asarray(time_values, dtype=float) * 1e3
+
+    def _scatter_series(self, ax, frames, values, *, color, label):
+        frames_arr = self._to_numpy_sequence(frames)
+        values_arr = self._to_numpy_sequence(values)
+        if frames_arr.size == 0 or values_arr.size == 0:
+            return
+        indices = self._stride_indices(len(frames_arr))
+        frames_ds = frames_arr[indices]
+        values_ds = values_arr[indices]
+
+        ax.plot(frames_ds, values_ds, color=color, **self.line_params)
+        ax.scatter(frames_ds, values_ds, color=color, label=label, **self.scatter_params)
+
+    def _scatter_multi_series(self, ax, frames, values, labels, color_offset: int = 0):
+        frames_arr = self._to_numpy_sequence(frames)
+        values_arr = np.asarray(values)
+        if frames_arr.size == 0 or values_arr.size == 0:
+            return
+        if values_arr.ndim == 1:
+            values_arr = values_arr[:, np.newaxis]
+        indices = self._stride_indices(frames_arr.shape[0])
+        frames_ds = frames_arr[indices]
+        for i, label in enumerate(labels):
+            if i >= values_arr.shape[1]:
+                break
+            series = values_arr[:, i]
+            if series.size == 0:
+                continue
+            series_ds = series[indices]
+            color = self.colors[(color_offset + i) % len(self.colors)]
+            ax.plot(frames_ds, series_ds, color=color, **self.line_params)
+            ax.scatter(frames_ds, series_ds, color=color, label=label, **self.scatter_params)
+
     def plot_area_vs_time(self, exp_id: int):
         area_data = self.exp.result_data['area'][exp_id]
-        frames = range(len(area_data))
+        time_ms = self._time_series_ms(exp_id)
         exp_name = self.exp.experiment_names[exp_id]
         
-        fig, ax = self._setup_plot(f"{exp_name}: Contour Area vs. Time", "Frame Index", "Contour Area (m^2)")
-        ax.plot(frames, area_data, color=self.colors[0], label='Contour Area', **self.plot_params)
+        fig, ax = self._setup_plot(f"{exp_name}: Contour Area vs. Time", self.time_axis_label, "Contour Area (m^2)")
+        self._scatter_series(ax, time_ms, area_data, color=self.colors[0], label='Contour Area')
         ax.legend(fontsize=self.font_sizes['legend'])
         self._save_plot(fig, exp_id, "area_vs_time.png")
 
     def plot_arc_length_vs_time(self, exp_id: int):
         arc_length_data = self.exp.result_data['arc_length'][exp_id]
-        frames = range(len(arc_length_data))
+        time_ms = self._time_series_ms(exp_id)
         exp_name = self.exp.experiment_names[exp_id]
 
-        fig, ax = self._setup_plot(f"{exp_name}: Arc Length vs. Time", "Frame Index", "Arc Length (m)")
-        ax.plot(frames, arc_length_data, color=self.colors[1], label='Arc Length', **self.plot_params)
+        fig, ax = self._setup_plot(f"{exp_name}: Arc Length vs. Time", self.time_axis_label, "Arc Length (m)")
+        self._scatter_series(ax, time_ms, arc_length_data, color=self.colors[1], label='Arc Length')
         ax.legend(fontsize=self.font_sizes['legend'])
         self._save_plot(fig, exp_id, "arc_length_vs_time.png")
 
     def plot_area_vec_vs_time(self, exp_id: int):
         area_vec_data = self.exp.result_data['area_vec'][exp_id][1:]
-        frames = range(1, len(area_vec_data) + 1)
+        time_ms = self._time_series_ms(exp_id)
+        time_ms = time_ms[1:] if time_ms.size else time_ms
         exp_name = self.exp.experiment_names[exp_id]
 
-        fig, ax = self._setup_plot(f"{exp_name}: Area Change vs. Time", "Frame Index", "Area Change (m^2/s)")
-        ax.plot(frames, area_vec_data, color=self.colors[2], label='Area Change', **self.plot_params)
+        fig, ax = self._setup_plot(f"{exp_name}: Area Change vs. Time", self.time_axis_label, "Area Change (m^2/s)")
+        self._scatter_series(ax, time_ms, area_vec_data, color=self.colors[2], label='Area Change')
         ax.legend(fontsize=self.font_sizes['legend'])
         self._save_plot(fig, exp_id, "area_vec_vs_time.png")
 
     def plot_regression_circle_radius_vs_time(self, exp_id: int):
         radius_data = self.exp.result_data['regression_circle_radius'][exp_id]
-        frames = range(len(radius_data))
+        time_ms = self._time_series_ms(exp_id)
         exp_name = self.exp.experiment_names[exp_id]
 
-        fig, ax = self._setup_plot(f"{exp_name}: Regression Circle Radius vs. Time", "Frame Index", "Radius (m)")
-        ax.plot(frames, radius_data, color=self.colors[3], label='Radius', **self.plot_params)
+        fig, ax = self._setup_plot(f"{exp_name}: Regression Circle Radius vs. Time", self.time_axis_label, "Radius (m)")
+        self._scatter_series(ax, time_ms, radius_data, color=self.colors[3], label='Radius')
         ax.legend(fontsize=self.font_sizes['legend'])
         self._save_plot(fig, exp_id, "regression_circle_radius_vs_time.png")
 
     def plot_expand_vec_vs_time(self, exp_id: int):
         expand_vel_data = self.exp.result_data['expand_vec'][exp_id]
-        frames = range(len(expand_vel_data))
         sanitized_expand_vel = [item if item else [0, 0, 0, 0] for item in expand_vel_data]
         expand_vel_data_np = np.array(sanitized_expand_vel)
+        time_ms = self._time_series_ms(exp_id)
 
         labels = ['Up', 'Right', 'Down', 'Left']
         exp_name = self.exp.experiment_names[exp_id]
         
-        fig, ax = self._setup_plot(f"{exp_name}: Expand Velocity vs. Time", "Frame Index", "Velocity (m/s)")
-        for i in range(expand_vel_data_np.shape[1]):
-            ax.plot(frames, expand_vel_data_np[:, i], color=self.colors[i+4], label=labels[i], **self.plot_params)
+        fig, ax = self._setup_plot(f"{exp_name}: Expand Velocity vs. Time", self.time_axis_label, "Velocity (m/s)")
+        self._scatter_multi_series(ax, time_ms, expand_vel_data_np, labels, color_offset=4)
         ax.legend(fontsize=self.font_sizes['legend'])
         self._save_plot(fig, exp_id, "expand_vel_vs_time.png")
     
     def plot_expand_dist_vs_time(self, exp_id: int):
         expand_dist_data = self.exp.result_data['expand_dist'][exp_id]
-        frames = range(len(expand_dist_data))
         sanitized_expand_dist = [item if item else [0, 0, 0, 0] for item in expand_dist_data]
         expand_dist_data_np = np.array(sanitized_expand_dist)
+        time_ms = self._time_series_ms(exp_id)
 
         labels = ['Up', 'Right', 'Down', 'Left']
         exp_name = self.exp.experiment_names[exp_id]
 
-        fig, ax = self._setup_plot(f"{exp_name}: Expand Distance vs. Time", "Frame Index", "Distance (m)")
-        for i in range(expand_dist_data_np.shape[1]):
-            ax.plot(frames, expand_dist_data_np[:, i], color=self.colors[i+4], label=labels[i], **self.plot_params)
+        fig, ax = self._setup_plot(f"{exp_name}: Expand Distance vs. Time", self.time_axis_label, "Distance (m)")
+        self._scatter_multi_series(ax, time_ms, expand_dist_data_np, labels, color_offset=4)
         ax.legend(fontsize=self.font_sizes['legend'])
         self._save_plot(fig, exp_id, "expand_dist_vs_time.png")
 
     def plot_tip_distance_vs_time(self, exp_id: int):
         tip_distance_data = self.exp.result_data['tip_distance'][exp_id]
-        frames = range(len(tip_distance_data))
+        time_ms = self._time_series_ms(exp_id)
         exp_name = self.exp.experiment_names[exp_id]
 
-        fig, ax = self._setup_plot(f"{exp_name}: Tip Distance vs. Time", "Frame Index", "Tip Distance (m)")
-        ax.plot(frames, tip_distance_data, color=self.colors[8], label='Tip Distance', **self.plot_params)
+        fig, ax = self._setup_plot(f"{exp_name}: Tip Distance vs. Time", self.time_axis_label, "Tip Distance (m)")
+        self._scatter_series(ax, time_ms, tip_distance_data, color=self.colors[8], label='Tip Distance')
         ax.legend(fontsize=self.font_sizes['legend'])
         self._save_plot(fig, exp_id, "tip_distance_vs_time.png")
 
@@ -134,28 +234,33 @@ class Visualizer:
         
         data_keys = ['area', 'arc_length', 'area_vec', 'regression_circle_radius', 'expand_dist', 'expand_vec', 'tip_distance']
         data = {key: self.exp.result_data[key][exp_id] for key in data_keys}
-        
-        frames_full = range(len(data['area']))
-        frames_vec = range(1, len(data['area_vec'][1:]) + 1)
+        time_ms = self._time_series_ms(exp_id)
+        time_ms_vec = time_ms[1:] if time_ms.size else time_ms
 
         fig, axs = plt.subplots(7, 1, figsize=(12, 35))
         fig.suptitle(f"{exp_name}: Summary Plots", fontsize=self.font_sizes['title'] + 4, fontweight='bold', y=0.99)
 
         plot_configs = [
-            {'ax_idx': 0, 'data_key': 'area', 'frames': frames_full, 'ylabel': "Contour Area (m^2)", 'title': "Contour Area", 'color_idx': 0},
-            {'ax_idx': 1, 'data_key': 'arc_length', 'frames': frames_full, 'ylabel': "Arc Length (m)", 'title': "Arc Length", 'color_idx': 1},
-            {'ax_idx': 2, 'data_key': 'area_vec', 'frames': frames_vec, 'data': data['area_vec'][1:], 'ylabel': "Area Change (m^2/s)", 'title': "Area Change", 'color_idx': 2},
-            {'ax_idx': 3, 'data_key': 'regression_circle_radius', 'frames': frames_full, 'ylabel': "Radius (m)", 'title': "Regression Circle Radius", 'color_idx': 3},
-            {'ax_idx': 6, 'data_key': 'tip_distance', 'frames': frames_full, 'ylabel': "Tip Distance (m)", 'title': "Tip Distance", 'color_idx': 8},
+            {'ax_idx': 0, 'data_key': 'area', 'time': time_ms, 'ylabel': "Contour Area (m^2)", 'title': "Contour Area", 'color_idx': 0},
+            {'ax_idx': 1, 'data_key': 'arc_length', 'time': time_ms, 'ylabel': "Arc Length (m)", 'title': "Arc Length", 'color_idx': 1},
+            {'ax_idx': 2, 'data_key': 'area_vec', 'time': time_ms_vec, 'data': data['area_vec'][1:], 'ylabel': "Area Change (m^2/s)", 'title': "Area Change", 'color_idx': 2},
+            {'ax_idx': 3, 'data_key': 'regression_circle_radius', 'time': time_ms, 'ylabel': "Radius (m)", 'title': "Regression Circle Radius", 'color_idx': 3},
+            {'ax_idx': 6, 'data_key': 'tip_distance', 'time': time_ms, 'ylabel': "Tip Distance (m)", 'title': "Tip Distance", 'color_idx': 8},
         ]
 
         for conf in plot_configs:
             ax = axs[conf['ax_idx']]
             plot_data = conf.get('data', data[conf['data_key']])
-            ax.plot(conf['frames'], plot_data, color=self.colors[conf['color_idx']], label=conf['title'], **self.plot_params)
+            self._scatter_series(
+                ax,
+                conf['time'],
+                plot_data,
+                color=self.colors[conf['color_idx']],
+                label=conf['title'],
+            )
             ax.set_title(conf['title'], fontsize=self.font_sizes['title'])
             ax.set_ylabel(conf['ylabel'], fontsize=self.font_sizes['label'])
-            ax.set_xlabel("Frame Index", fontsize=self.font_sizes['label'])
+            ax.set_xlabel(self.time_axis_label, fontsize=self.font_sizes['label'])
             ax.grid(True, which='both', linestyle='--', linewidth=0.5)
             ax.legend(fontsize=self.font_sizes['legend'])
 
@@ -169,11 +274,10 @@ class Visualizer:
             ax = axs[conf['ax_idx']]
             raw_data = data[conf['data_key']]
             sanitized_data = np.array([item if item else [0,0,0,0] for item in raw_data])
-            for i in range(sanitized_data.shape[1]):
-                ax.plot(frames_full, sanitized_data[:, i], color=self.colors[i+4], label=labels[i], **self.plot_params)
+            self._scatter_multi_series(ax, time_ms, sanitized_data, labels, color_offset=4)
             ax.set_title(conf['title'], fontsize=self.font_sizes['title'])
             ax.set_ylabel(conf['ylabel'], fontsize=self.font_sizes['label'])
-            ax.set_xlabel("Frame Index", fontsize=self.font_sizes['label'])
+            ax.set_xlabel(self.time_axis_label, fontsize=self.font_sizes['label'])
             ax.grid(True, which='both', linestyle='--', linewidth=0.5)
             ax.legend(fontsize=self.font_sizes['legend'])
 
@@ -214,14 +318,23 @@ class Visualizer:
         for key in data_keys:
             title = f"Comparison: {key.replace('_', ' ').title()} vs. Time"
             ylabel = f"{key.replace('_', ' ').title()} (m)" # Basic unit, can be improved
-            fig, ax = self._setup_plot(title, "Frame Index", ylabel)
+            fig, ax = self._setup_plot(title, self.time_axis_label, ylabel)
 
             for i, exp_id in enumerate(exp_ids):
                 if key in self.exp.result_data and exp_id < len(self.exp.result_data[key]):
                     data = self.exp.result_data[key][exp_id]
-                    frames = range(len(data))
+                    time_ms = self._time_series_ms(exp_id)
+                    if key == 'area_vec':
+                        data = data[1:]
+                        time_ms = time_ms[1:] if time_ms.size else time_ms
                     exp_name = self.exp.experiment_names[exp_id]
-                    ax.plot(frames, data, color=self.colors[i % len(self.colors)], label=exp_name, **self.plot_params)
+                    self._scatter_series(
+                        ax,
+                        time_ms,
+                        data,
+                        color=self.colors[i % len(self.colors)],
+                        label=exp_name,
+                    )
                 else:
                     logger.warning(f"Data for key '{key}' and experiment ID {exp_id} not found. Skipping.")
 

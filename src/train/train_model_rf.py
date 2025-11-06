@@ -15,7 +15,7 @@ def train_flame_model():
     
     # Define the target variable we want to predict.
     # Common choices could be 'area', 'tip_distance', 'arc_length', etc.
-    TARGET_VARIABLE = 'area' 
+    TARGET_VARIABLE = 'tip_distance' 
 
     LABELS = ['area', 'arc_length', 'area_vec', 'regression_circle_center', 'regression_circle_radius', 'expand_dist', 'expand_vec', 'tip_distance']
     

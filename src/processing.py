@@ -78,6 +78,7 @@ def transform_all(exp: Experiment, exp_id: int):
 def exec_once(data_manager: DataManager, exp_id: int):
     exec_img(data_manager.experiment, exp_id)
     transform_all(data_manager.experiment, exp_id)
+    trim_experiment_to_area_peak(data_manager.experiment, exp_id)
 
 def regression_circle(contour: cv2.Mat):
     points = contour.reshape(-1, 2)
@@ -172,3 +173,60 @@ def transform_scale(data_config, exp: Experiment, exp_id: int, frame_id: int):
     exp.result_data['expand_vec'][exp_id][frame_id] = [v * distance_scale / time_scale for v in vecs]
     exp.result_data['time'][exp_id][frame_id] = exp.result_data['frame_id'][exp_id][frame_id] * time_scale
     exp.result_data['tip_distance'][exp_id][frame_id] *= distance_scale
+
+
+def trim_experiment_to_area_peak(exp: Experiment, exp_id: int):
+    area_series = exp.result_data['area'][exp_id]
+    if not area_series:
+        return
+
+    area_array = np.array(area_series)
+    non_zero_indices = np.where(area_array > 0)[0]
+    if non_zero_indices.size == 0:
+        # No positive area detected; nothing to trim.
+        return
+
+    start_idx = int(non_zero_indices[0])
+    peak_value = area_array.max()
+    peak_indices = np.where(area_array == peak_value)[0]
+    if peak_indices.size == 0:
+        return
+    end_idx = int(peak_indices[-1])
+
+    if end_idx < start_idx:
+        end_idx = start_idx
+
+    slice_obj = slice(start_idx, end_idx + 1)
+
+    # Trim stored experiment images and features to stay consistent with result data.
+    exp.experiment_imgs[exp_id] = exp.experiment_imgs[exp_id][slice_obj]
+    if exp.experiment_features[exp_id]:
+        exp.experiment_features[exp_id] = exp.experiment_features[exp_id][slice_obj]
+
+    # Trim derived result images.
+    for result_type, per_experiment_imgs in exp.result_imgs.items():
+        exp.result_imgs[result_type][exp_id] = per_experiment_imgs[exp_id][slice_obj]
+
+    # Trim result data arrays.
+    for key, per_experiment_data in exp.result_data.items():
+        exp.result_data[key][exp_id] = per_experiment_data[exp_id][slice_obj]
+
+    # Rebase frame_id/time so the interval starts at zero.
+    frame_ids = exp.result_data['frame_id'][exp_id]
+    if frame_ids:
+        base_frame = frame_ids[0]
+        exp.result_data['frame_id'][exp_id] = [fid - base_frame for fid in frame_ids]
+
+    times = exp.result_data['time'][exp_id]
+    if times:
+        base_time = times[0]
+        exp.result_data['time'][exp_id] = [t - base_time for t in times]
+
+    # Reset derivative-like entries at the new interval origin.
+    area_vec = exp.result_data['area_vec'][exp_id]
+    if area_vec:
+        area_vec[0] = 0.0
+
+    expand_vec = exp.result_data['expand_vec'][exp_id]
+    if expand_vec:
+        expand_vec[0] = [0.0, 0.0, 0.0, 0.0]

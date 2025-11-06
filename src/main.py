@@ -14,5 +14,5 @@ if __name__ == '__main__':
         exec_once(data_manager, i)
         
     data_manager.save_all_experiment()
-    vis = Visualizer(config, data_manager)
-    vis.plot_all()
+    # vis = Visualizer(config, data_manager)
+    # vis.plot_all()
