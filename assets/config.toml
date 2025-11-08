@@ -4,8 +4,19 @@ img_output_dir = "data/processed"
 result_output_dir = "data/dataset"
 result_csv_path = "data/dataset/total_dataset.csv"
 plot_output_dir = "data/plot"
-save_processed_images = false
+save_processed_images = true
 save_processed_data = true
+min_contour_area = 60  # Ignore contours smaller than this many pixels
+normalize_gray = true
+normalize_diff_output = true
+threshold_method = "fixed"  # options: fixed, otsu, adaptive
+binary_threshold = 90
+adaptive_block_size = 71
+adaptive_C = -2
+blur_kernel_size = 5        # odd number; set <=1 to disable
+apply_morph_close = true
+morph_kernel_size = 5       # odd number for structural element
+morph_iterations = 1
 
 [data]
 hole_pt = [192, 150]

@@ -72,6 +72,7 @@ class Experiment:
             'gray': copy_shape(),
             'thresh': copy_shape(),
             'contour': copy_shape(),
+            'raw': copy_shape(),
         }
         copy_shape_zero = lambda : [[0.0 for _ in experiment_group] for experiment_group in self.experiment_imgs]
         copy_shape_arr = lambda : [[[] for _ in experiment_group] for experiment_group in self.experiment_imgs]
@@ -188,6 +189,31 @@ class Experiment:
     def save_result_imgs(self, base_output_dir: str):
         logger.info(f"saving result imgs to '{base_output_dir}'...")
 
+        font = cv2.FONT_HERSHEY_SIMPLEX
+        text_anchor = (10, 35)
+        font_scale = 1.0
+        text_color = (0, 255, 0)
+        text_thickness = 2
+
+        def annotate_with_frame_idx(image, label: str):
+            if image is None:
+                return None
+            if len(image.shape) == 2:
+                annotated = cv2.cvtColor(image, cv2.COLOR_GRAY2BGR)
+            else:
+                annotated = image.copy()
+            cv2.putText(
+                annotated,
+                label,
+                text_anchor,
+                font,
+                font_scale,
+                text_color,
+                text_thickness,
+                cv2.LINE_AA
+            )
+            return annotated
+
         # Remove stale outputs for current experiments to avoid leftover frames beyond the trimmed range.
         if os.path.isdir(base_output_dir):
             for exp_name in self.experiment_names:
@@ -208,14 +234,17 @@ class Experiment:
             for result_type, all_experiments_imgs in self.result_imgs.items():
                 for exp_id, experiment_group_imgs in enumerate(all_experiments_imgs):
                     exp_name = self.experiment_names[exp_id]
+                    frame_digits = max(3, len(str(max(len(experiment_group_imgs) - 1, 0))))
                     for img_idx, img in enumerate(experiment_group_imgs):
                         if img is not None:
                             target_dir = os.path.join(base_output_dir, exp_name, result_type)
                             os.makedirs(target_dir, exist_ok=True)
-                            
-                            file_path = os.path.join(target_dir, f"{img_idx:03d}.png")
-                            cv2.imwrite(file_path, img)
-                            
+
+                            file_path = os.path.join(target_dir, f"{img_idx:0{frame_digits}d}.png")
+                            label = f"{img_idx:0{frame_digits}d}"
+                            annotated_img = annotate_with_frame_idx(img, label)
+                            cv2.imwrite(file_path, annotated_img)
+
                             pbar.update(1)
         
         logger.success("finished")
